@@ -4,7 +4,9 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.Reader;
 import java.util.ArrayList;
 import java.util.Properties;
 
@@ -25,11 +27,11 @@ public class Main {
 		String EWID = arg[0];
 		String user = arg[1];
 		String host = arg[2];
-		String confDir = "/app/ipp01/jbossesb-server-4.11/server/ports-07/deploy/properties-service.xml";
+		String confDir = "/app/ipp01/jbossesb-server-4.11/server/ports-02/deploy/properties-service.xml";
 		if (arg.length >= 6) {
 			confDir = arg[4];
 		}
-		String runDir = "/app/ipp/ipp_klient/bin";
+		String runDir = "/app/ipp01/ipp_klient/bin";
 		if (arg.length >= 7) {
 			runDir = arg[5];
 		}
@@ -106,7 +108,7 @@ public class Main {
 					channelStftp.cd(outDir);
 					System.out.println("Copying file: " + ((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", "").replaceAll("\t", ""));
 					InputStream str = channelStftp.get(((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", ""));
-					OutputStream out = new FileOutputStream(new File(name + "/" + ((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", "")));
+					OutputStream out = new FileOutputStream(new File(EWID + "/" + ((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", "")));
 					int read = 0;
 					byte[] bytes = new byte[1024];
 					while ((read = str.read(bytes)) != -1)
@@ -136,43 +138,38 @@ public class Main {
 			System.err.println("Missing required parameters!");
 			System.exit(0);
 		}
-
 	}
 
 	private static String describeRequiredParameters() {
-		String description = "-ewid -login_to_host -pass_to_host -config_dir";
-
+		String description = "-ewid -login_to_host -pass_to_host -config_dir -runDir -campFlag";
 		return description;
 	}
 
-	private static String conn(Session session, String cmd) throws JSchException, IOException {
+	private static String conn(Session session, String cmd) throws JSchException, IOException, Exception {
 		Channel channel = session.openChannel("exec");
 		((ChannelExec) channel).setCommand(cmd);
 		channel.setInputStream(null);
 		((ChannelExec) channel).setErrStream(System.err);
 		InputStream in = channel.getInputStream();
+		Reader reader = new InputStreamReader(in);
+		BufferedReader bufferedReader = new BufferedReader(reader);
 		channel.connect();
 		System.out.println("Connected to IPP.");
-		String line = "";
-		byte[] tmp = new byte[1024];
 
-		int i = in.read(tmp, 0, 1024);
-		if (i >= 0) {
-			line = line + new String(tmp, 0, i);
-		}
+		StringBuilder output = new StringBuilder();
+
+		String line = "";
+
 		while (true) {
-			label115: if (in.available() <= 0)
-				;
-			if (!(channel.isClosed())) {
-				try {
-					Thread.sleep(1000L);
-				} catch (Exception localException) {
-				}
-			} else {
-				in.close();
-				channel.disconnect();
-				return line;
+			line = bufferedReader.readLine();
+			output.append(line);
+			if (line == null) {
+				break;
 			}
+			Thread.sleep(100);
 		}
+		channel.disconnect();
+		session.disconnect();
+		return output.toString();
 	}
 }
