@@ -1,5 +1,6 @@
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
@@ -8,7 +9,10 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.Reader;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Properties;
+import java.util.logging.Logger;
 
 import com.jcraft.jsch.Channel;
 import com.jcraft.jsch.ChannelExec;
@@ -20,124 +24,132 @@ import com.jcraft.jsch.SftpException;
 
 public class Main {
 
-	public static void main(String[] arg) {
+	private static final String EFLAG = " -e ";
+	private static final int STANDARD_PORT = 22;
+	private static final int DELAY_BEFORE_GREP = 4000;
+	private static final Logger log = Logger.getLogger("ABNF_Download");
 
-		checkPassedArgs(arg);
+	public static void main(String[] arg) throws Exception {
 
-		String EWID = arg[0];
-		String user = arg[1];
-		String host = arg[2];
-		String confDir = "/app/ipp01/jbossesb-server-4.11/server/ports-02/deploy/properties-service.xml";
-		if (arg.length >= 6) {
-			confDir = arg[4];
+		if (!checkPassedArgs(arg))
+			return;
+
+		final String EWID = arg[0];
+		final String user = arg[1];
+		final String host = arg[2];
+		final String pass = arg[3];
+		final String confDir = arg[4];
+		final String runDir = arg[5];
+		final String camp_flag = arg[6];
+
+		List<String> billNoList = readBillNo();
+		Session session = getConnectedSession(user, host, pass);
+		String cmd = "cd " + runDir + "\n./ipp.sh -mode test -acc_range " + EWID + "_" + EWID + " -camp " + camp_flag;
+
+		log.info("Executing: " + cmd);
+		log.info("Creating ABNF...");
+
+		conn(session, cmd);
+		Thread.sleep(DELAY_BEFORE_GREP);
+
+		cmd = "grep ipp_adf_out " + confDir;
+		log.info("Checkin ipp out directory...");
+
+		String line = conn(session, cmd);
+		String outDir = line.replaceFirst("ipp_adf_out=", "").replaceAll("\n", "").replaceAll(" ", "").replaceAll("\t", "");
+
+		log.info("IPP out directory: " + outDir);
+
+		String billNo = preperCMDforSerchingBillFile(billNoList);
+		cmd = "cd " + outDir + " \ngrep -r -l " + billNo + " *";
+
+		log.info("Executing grep " + cmd);
+		log.info("Downloading ABNF file...");
+		line = conn(session, cmd);
+		log.info("Generated files: \n" + line);
+
+		List<String> fileToDownload = Arrays.asList(line.split("\n"));
+
+		if (fileToDownload.size() == 0) {
+			log.info("No ABNF files for given account ID!");
+			return;
 		}
-		String runDir = "/app/ipp01/ipp_klient/bin";
-		if (arg.length >= 7) {
-			runDir = arg[5];
-		}
-		int delay = 4000;
 
-		String camp_flag = null;
-		if (arg.length == 8) {
-			camp_flag = arg[6];
-		}
+		downloadFiles(EWID, session, outDir, fileToDownload);
 
-		String billPatterns = "";
-		try {
-			BufferedReader br = new BufferedReader(new FileReader("bill_no"));
-			StringBuilder sb = new StringBuilder();
-			String line = br.readLine();
+		session.disconnect();
+	}
 
-			while (line != null) {
-				sb.append(" -e " + line);
-				line = br.readLine();
-			}
-			billPatterns = sb.toString();
-			br.close();
-		} catch (Exception e) {
-			System.err.println("Error reading bill numbers");
-		}
-		try {
-			JSch jsch = new JSch();
-			Session session = jsch.getSession(user, host, 22);
-			session.setPassword(arg[3]);
-			Properties config = new Properties();
-			config.put("StrictHostKeyChecking", "no");
-			session.setConfig(config);
-			session.connect();
-			if (camp_flag == null) {
-				System.err.println("Bad current version number!");
-				return;
-			}
-			String cmd = "cd " + runDir + "\n./ipp.sh -mode test -acc_range " + EWID + "_" + EWID + " -camp " + camp_flag;
-			System.out.println("Executing: " + cmd);
-			System.out.println("Creating ABNF...");
-			conn(session, cmd);
-			try {
-				Thread.sleep(delay);
-			} catch (Exception localException1) {
-			}
-			cmd = "grep ipp_adf_out " + confDir;
-			System.out.println("Checkin ipp out directory...");
-			String line = conn(session, cmd);
-			String outDir = line.replaceFirst("ipp_adf_out=", "").replaceAll("\n", "").replaceAll(" ", "").replaceAll("\t", "");
-			System.out.println("IPP out directory: " + outDir);
-			cmd = "cd " + outDir + " \ngrep -r -l " + billPatterns + " *";
-			System.out.println("Executing grep " + cmd);
-			System.out.println("Downloading ABNF file...");
-			line = conn(session, cmd);
-			System.out.println("Generated files: \n" + line);
-			ArrayList fnames = new ArrayList();
-			String fname = "";
-			for (int i = 0; i < line.length(); ++i) {
-				fname = fname + line.charAt(i);
-				if (line.charAt(i) != '\n')
-					continue;
-				fnames.add(fname);
-				fname = "";
-			}
+	public static void downloadFiles(String EWID, Session session, String outDir, List<String> fileToDownload)
+			throws JSchException, SftpException, FileNotFoundException, IOException {
 
-			if (fnames.size() == 0) {
-				System.out.println("No ABNF files for given account ID!");
-			} else {
-				for (int i = 0; i < fnames.size(); ++i) {
-					if (((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", "").equals(""))
-						continue;
-					ChannelSftp channelStftp = (ChannelSftp) session.openChannel("sftp");
-					channelStftp.connect();
-					channelStftp.cd(outDir);
-					System.out.println("Copying file: " + ((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", "").replaceAll("\t", ""));
-					InputStream str = channelStftp.get(((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", ""));
-					OutputStream out = new FileOutputStream(new File(EWID + "/" + ((String) fnames.get(i)).replaceAll("\n", "").replaceAll(" ", "")));
-					int read = 0;
-					byte[] bytes = new byte[1024];
-					while ((read = str.read(bytes)) != -1)
-						out.write(bytes, 0, read);
-					str.close();
-					out.flush();
-					out.close();
-					channelStftp.disconnect();
-				}
-			}
+		for (String file : fileToDownload) {
+			if (file.equals(""))
+				continue;
+			ChannelSftp channelStftp = (ChannelSftp) session.openChannel("sftp");
+			channelStftp.connect();
+			log.info("Copying file: " + file);
+			String cmd = outDir + file;
+			OutputStream out = new FileOutputStream(new File(EWID + "_" + file));
+			channelStftp.get(cmd, out);
 
-			session.disconnect();
-		} catch (JSchException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		} catch (SftpException e) {
-			e.printStackTrace();
-		} catch (Exception e) {
-			e.printStackTrace();
+			out.flush();
+			out.close();
+			channelStftp.disconnect();
 		}
 	}
 
-	private static void checkPassedArgs(String[] args) {
-		if (args.length < 5) {
-			System.out.println(describeRequiredParameters());
-			System.err.println("Missing required parameters!");
+	private static String preperCMDforSerchingBillFile(List<String> billNoList) {
+		StringBuilder stringBuilder = new StringBuilder();
+		for (String billNo : billNoList) {
+			stringBuilder.append(EFLAG).append(billNo);
+		}
+		return stringBuilder.toString();
+	}
+
+	private static List<String> readBillNo() {
+		List<String> billNoList = new ArrayList<>();
+		try (BufferedReader br = new BufferedReader(new FileReader("bill_no"))) {
+
+			String line = br.readLine();
+
+			while (line != null) {
+				billNoList.add(line);
+				line = br.readLine();
+			}
+
+			if (billNoList.size() == 0) {
+				log.warning("Empty bill_on file");
+				System.exit(0);
+			} else {
+				log.info("Find " + billNoList.size() + " billing numbers");
+			}
+
+		} catch (Exception e) {
+			log.warning("Error reading bill numbers");
 			System.exit(0);
 		}
+		return billNoList;
+	}
+
+	private static Session getConnectedSession(String user, String host, String pass) throws JSchException {
+		JSch jsch = new JSch();
+		Session session = jsch.getSession(user, host, STANDARD_PORT);
+		session.setPassword(pass);
+		Properties config = new Properties();
+		config.put("StrictHostKeyChecking", "no");
+		session.setConfig(config);
+		session.connect();
+		return session;
+	}
+
+	public static boolean checkPassedArgs(String[] args) {
+		if (args.length < 7) {
+			System.out.println(describeRequiredParameters());
+			System.err.println("Missing required parameters!");
+			return false;
+		}
+		return true;
 	}
 
 	private static String describeRequiredParameters() {
@@ -145,7 +157,7 @@ public class Main {
 		return description;
 	}
 
-	private static String conn(Session session, String cmd) throws JSchException, IOException, Exception {
+	public static String conn(Session session, String cmd) throws JSchException, IOException, Exception {
 		Channel channel = session.openChannel("exec");
 		((ChannelExec) channel).setCommand(cmd);
 		channel.setInputStream(null);
@@ -162,11 +174,9 @@ public class Main {
 
 		while (true) {
 			line = bufferedReader.readLine();
-			output.append(line);
-			if (line == null) {
+			if (line == null)
 				break;
-			}
-			Thread.sleep(100);
+			output.append("\n").append(line);
 		}
 		channel.disconnect();
 		session.disconnect();
