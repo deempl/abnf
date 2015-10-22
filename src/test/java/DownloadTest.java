@@ -13,6 +13,8 @@ import com.jcraft.jsch.JSchException;
 import com.jcraft.jsch.Session;
 import com.jcraft.jsch.SftpException;
 
+import start.Main;
+
 public class DownloadTest {
 
 	@Parameter
@@ -66,5 +68,14 @@ public class DownloadTest {
 	@Test
 	public void downloadABNF() throws Exception, JSchException, SftpException, IOException, Throwable {
 		Main.downloadFiles("TEST", getSession(), outDir, fileToDownload);
+	}
+
+	@Test
+	public void preperCMD() throws Exception {
+		System.out.println(Main.class.getPackage().getName());
+		String preparIppCmd = Main.preparIppCmd("C:\\msm\\cdc\\ss", "4", "0700845646");
+		Assert.assertNotNull(preparIppCmd);
+		// System.out.println(preparIppCmd);
+
 	}
 }
